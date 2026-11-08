@@ -251,6 +251,13 @@ Or directly via npm:
 npm install dsh-connect-workbuddy
 ```
 
+> 📦 **Installing from the git URL (`github:…` / `git+https://…`) compiles on the spot and needs Node ≥ 22.19.** This repo
+> does **not** commit the built `lib/` output (`.gitignore` lists `lib/`; the build ships only inside the npm package), so a
+> git dependency is compiled through `prepare → tsdown`, and `engines.node` is `^22.19.0 || >=24`. With a default Node 18
+> on `PATH` the install fails right there — this is **not** a plugin/host incompatibility, and switching the DSH version
+> (or widening a peer range) will not fix it. If your Node is older, use the npm command above: same code, **prebuilt**, no
+> local compilation and no devDependencies.
+
 Restart the DSH process after install/update/uninstall.
 
 Once installed, the configuration lives in the **WorkBuddy page of the Settings panel's left-hand navigation** (beside "Account & balance", "General", "Models" and "Plugins"). As of 5.19.0 the bundle detail page in the plugin marketplace **no longer shows a configuration card** — one configuration keeps exactly one editing entry. The "Settings" control at the foot of the sidebar opens that same panel.

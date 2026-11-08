@@ -271,6 +271,12 @@ dsh plugin --profile desktop add dsh-connect-workbuddy
 npm install dsh-connect-workbuddy
 ```
 
+> 📦 **从 git 地址安装（`github:…` / `git+https://…`）是现场编译，要求 Node ≥ 22.19。** 本仓库**不提交
+> `lib/` 构建产物**（`.gitignore` 里就列着 `lib/`，产物只随 npm 包分发），所以 git 依赖要靠 `prepare → tsdown`
+> 现编，而 `engines.node` 是 `^22.19.0 || >=24`。PATH 上还是默认的 Node 18 时，安装会在这一步失败——这**不是**
+> 插件与宿主不兼容，换 Host 版本、放宽 peer 范围都修不好它。Node 版本不够就用上面的 npm 命令：那是同一份代码的
+> **预先构建版**，不需要本地编译，也不需要 devDependencies。
+
 安装、更新或卸载 bundle 后，需要重启对应的 DSH 进程。
 
 安装完成后的配置入口在**设置面板左侧导航的「WorkBuddy」**（与「账号与余额 / 通用设置 /
