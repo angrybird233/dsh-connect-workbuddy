@@ -35,6 +35,7 @@ import {
   prepareChatBody,
   modelIdOfBody,
   forceNeutralHead,
+  headForIdentity,
   channelGateMemberOf,
   isConversationIdGateBody,
   isContextTooLongBody,
@@ -139,6 +140,17 @@ export interface WorkBuddyShimOptions {
    * `keepPromptLast` is on.
    */
   extraInjectedPrefixes?: readonly string[]
+  /**
+   * Which line the plugin may put in front of a scanned message (`identityHead`).
+   *
+   * `'neutral'` (default) is the placeholder `You are a helpful assistant.`;
+   * `'workbuddy'` claims the client the access token belongs to instead
+   * (`You are an AI agent running inside WorkBuddy.`). Both the normal path and
+   * the channel-gate rescue read it from here, so one request never carries two
+   * different identities. See `WORKBUDDY_VOICED_SYSTEM_PROMPT` for the measured
+   * cost that keeps the voiced head off by default.
+   */
+  identityHead?: 'neutral' | 'workbuddy'
   /**
    * Move the host's session-title request onto the hidden lightweight model
    * (issues #132/#133). Disabled by default; when enabled, a body recognized
@@ -1691,6 +1703,7 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
     const prepared = rewriteSessionTitleModel(prepareChatBody(raw, {
       keepPromptLast: keepPromptLastEnabled,
       extraInjectedPrefixes,
+      identityHead: options.identityHead ?? 'neutral',
     }), sessionTitleOptions)
     // The model this request is about, read from the body that goes upstream
     // (issue #61). Read ONCE, so every attempt — the first and each failover
@@ -1795,7 +1808,7 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
     let retriedWithPerturbation = false
     let retriedWithDensePerturbation = false
     if (!result.ok && result.kind === 'channel_reject' && !controller.signal.aborted) {
-      const forced = forceNeutralHead(prepared)
+      const forced = forceNeutralHead(prepared, headForIdentity(options.identityHead))
       if (forced !== undefined) {
         logger?.warn('dsh-connect-workbuddy: the channel gate refused the body; retrying once with the neutral head forced in front of every opening')
         result = await client.chatStream(credential, forced, controller.signal)

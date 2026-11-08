@@ -2226,6 +2226,58 @@ export function describeRequestHeaderNames(
 export const WORKBUDDY_FALLBACK_SYSTEM_PROMPT = 'You are a helpful assistant.'
 
 /**
+ * The WorkBuddy-voiced alternative to {@link WORKBUDDY_FALLBACK_SYSTEM_PROMPT}.
+ *
+ * WHY IT EXISTS. The placeholder head is deliberately neutral, so the FIRST
+ * line of a rescued request describes the client as nothing in particular while
+ * the prompt underneath it still names the host in the sentences the gateway
+ * already refuses. A gateway that scores a request by what its opening CLAIMS
+ * still reads a third-party harness behind a neutral line. This head claims the
+ * client the access token actually belongs to instead — same role, same length
+ * class, and no new claim about what the MODEL is.
+ *
+ * WHY IT IS NOT THE DEFAULT. Measured 2026-10-21 on the live CN gateway (same
+ * account, same DSH prompt, only the head line swapped, asked 「你是哪个产品的
+ * 助手？」— CHANGELOG 4.14.1): the neutral head keeps the answer
+ * 「我是 DeepSeek 的编程助手。」, while both voiced variants answer as that
+ * product. A head is prepended to EVERY scanned message a rescue touches, so
+ * the shift is paid on every request it covers, not only on the refused ones.
+ * It is therefore an explicit opt-in (`identityHead: 'workbuddy'`), never a
+ * silent change on upgrade.
+ *
+ * It is also not a GATE fix: the gate that refuses the DSH identity is defeated
+ * by {@link CHANNEL_GATE_PHRASES} and {@link breakIdentityClauses}, not here.
+ * This head exists for the layer above the gate — what the request says it is.
+ */
+export const WORKBUDDY_VOICED_SYSTEM_PROMPT = 'You are an AI agent running inside WorkBuddy.'
+
+/**
+ * Every head this plugin may have put in front of a scanned message.
+ *
+ * ALL of them are recognised, not just the configured one. A session rescued
+ * under one setting can be rescued again after the setting changes, and
+ * {@link forceNeutralHead} has to see the older head as "already headed" —
+ * otherwise the retry stacks a second identity line on top of the first and
+ * spends a request on a body nobody ever measured.
+ */
+const NEUTRAL_HEADS: readonly string[] = [
+  WORKBUDDY_FALLBACK_SYSTEM_PROMPT,
+  WORKBUDDY_VOICED_SYSTEM_PROMPT,
+]
+
+/**
+ * The head line one request should use, from the configured `identityHead`.
+ *
+ * One function rather than three `options?.identityHead === 'workbuddy'`
+ * branches: the normal path (`prepareChatBody`), the self-healing retry
+ * (`forceNeutralHead`) and the missing-prompt placeholder (`ensureSystemHead`)
+ * all have to agree, or a single body carries two different identities.
+ */
+export function headForIdentity(identityHead: 'neutral' | 'workbuddy' | undefined): string {
+  return identityHead === 'workbuddy' ? WORKBUDDY_VOICED_SYSTEM_PROMPT : WORKBUDDY_FALLBACK_SYSTEM_PROMPT
+}
+
+/**
  * System-prompt openings the gateways fingerprint as "an unapproved channel".
  *
  * WHY THIS EXISTS (measured 2026-10-21 00:05 on the real gateways, CN account
@@ -2371,16 +2423,20 @@ export function isUnapprovedChannelOpening(text: string): boolean {
 }
 
 /**
- * Whether this text already begins with the plugin's own neutral head.
+ * Whether this text already begins with a head this plugin itself would add.
  *
  * The question the failure path has to answer per system message: "is the
- * line the gateway refused OURS, or the HOST's?" — the plugin's head is the
- * one line it has ever added to a prompt, so it is the only opening that
+ * line the gateway refused OURS, or the HOST's?" — the plugin's heads are the
+ * only openings it has ever added to a prompt, so they are the openings that
  * cannot be a third-party-agent fingerprint.
+ *
+ * EVERY known head counts, not just the configured one ({@link NEUTRAL_HEADS}):
+ * the setting can change between two rescues of the same session, and a body
+ * that already carries yesterday's head must not get today's stacked on top.
  */
 function startsWithNeutralHead(text: string): boolean {
   const opening = text.replace(/^\s+/u, '').toLowerCase()
-  return opening.startsWith(WORKBUDDY_FALLBACK_SYSTEM_PROMPT.toLowerCase())
+  return NEUTRAL_HEADS.some(head => opening.startsWith(head.toLowerCase()))
 }
 
 /**
@@ -2438,11 +2494,30 @@ function scansOpening(role: unknown): boolean {
  * sentence alone answering 200 — so a row must clear the truncated shape too,
  * which is exactly what sentence-level rows do. Pinned by
  * `tests/issue163-sentence-rewrite.spec.ts`.
+ *
+ * WHY THE REPLACEMENTS NAME WORKBUDDY RATHER THAN THE HOST. Up to 5.20.32 the
+ * rewrites kept the host's branding ("… running inside DeepSeek Harness"), which
+ * is enough for the gate — the gate refuses a LITERAL, and a reworded literal is
+ * not a hit — but it leaves the request still announcing a third-party harness
+ * at exactly the offset the gateway reads first. Since a rewrite has to happen
+ * anyway, the replacement is the one place the plugin can choose what the
+ * request says it is: a sentence whose meaning is preserved for the model, and
+ * whose subject is the client the access token belongs to. The gate rows above
+ * are measured against the REFUSED literals, so the replacement text only has to
+ * avoid those literals — it is deliberately not branded "CodeBuddy" either, so a
+ * region that does not know that product is not asked to trust a stranger name.
  */
 const CHANNEL_GATE_PHRASES: readonly (readonly [string, string])[] = [
   [
     'You are an AI agent powered by DeepSeek Harness',
-    'You are an AI agent running inside DeepSeek Harness',
+    // NOT the same string as {@link WORKBUDDY_VOICED_SYSTEM_PROMPT}, and that is
+    // load-bearing: {@link startsWithNeutralHead} treats a text that BEGINS with
+    // a head as already headed, so a rewrite that reproduced the head verbatim
+    // would make every rewritten message look like the plugin's own headwork and
+    // stop {@link forceNeutralHead} from ever adding one. "the WorkBuddy client"
+    // keeps the claim, the grammar and the length class while staying a
+    // different sentence.
+    'You are an AI agent running inside the WorkBuddy client',
   ],
   [
     'You are a coding agent powered by the ',
@@ -2450,7 +2525,7 @@ const CHANNEL_GATE_PHRASES: readonly (readonly [string, string])[] = [
   ],
   [
     'You are interacting with the user through the DeepSeek Harness Web GUI',
-    'You are working with the user inside the DeepSeek Harness Web GUI',
+    'You are working with the user inside the WorkBuddy panel',
   ],
   // Reported by liyixin21 and found in appulsexi-maker's real system prompt
   // (issue #163, 19:12). Same-meaning rewrite; the table is meant to grow.
@@ -2573,7 +2648,12 @@ function rewriteChannelFingerprintPhrasesInBody(obj: Record<string, unknown>): v
 
 /**
  * Move every scanned message (`system` and `assistant`) off the content
- * fingerprint above by prepending the placeholder head.
+ * fingerprint above by prepending a head line.
+ *
+ * The head comes from `identityHead`: the neutral placeholder by default, the
+ * WorkBuddy-voiced line when the user opted in. Either way it is a HEAD, not a
+ * rewrite — the host's own text follows it unchanged apart from the breaks
+ * {@link breakIdentityClauses} adds.
  *
  * A no-op for a body whose messages start with anything else, so a request the
  * gateways already answer keeps its prompt byte-for-byte — only the messages
@@ -2594,7 +2674,7 @@ function rewriteChannelFingerprintPhrasesInBody(obj: Record<string, unknown>): v
  * fix the first half of the failure and leave the second half to the users who
  * report it again.
  */
-function neutralizeChannelFingerprints(obj: Record<string, unknown>): void {
+function neutralizeChannelFingerprints(obj: Record<string, unknown>, head: string): void {
   const messages = obj['messages']
   if (!Array.isArray(messages)) return
   for (const value of messages) {
@@ -2603,7 +2683,7 @@ function neutralizeChannelFingerprints(obj: Record<string, unknown>): void {
     if (!scansOpening(message['role'])) continue
     const content = message['content']
     if (typeof content === 'string') {
-      const next = neutralizeScannedText(content)
+      const next = neutralizeScannedText(content, head)
       if (next !== undefined) message['content'] = next
       continue
     }
@@ -2617,7 +2697,7 @@ function neutralizeChannelFingerprints(obj: Record<string, unknown>): void {
       if (typeof type !== 'string' || type.trim().toLowerCase() !== 'text') continue
       const text = record['text']
       if (typeof text !== 'string') continue
-      const next = neutralizeScannedText(text)
+      const next = neutralizeScannedText(text, head)
       if (next !== undefined) record['text'] = next
     }
   }
@@ -2643,10 +2723,8 @@ function neutralizeChannelFingerprints(obj: Record<string, unknown>): void {
  * the Claude Code opening on the prefix list carries no identity clause, and an
  * identity clause nobody put on the prefix list needs no head.
  */
-function neutralizeScannedText(text: string): string | undefined {
-  const headed = isUnapprovedChannelOpening(text)
-    ? `${WORKBUDDY_FALLBACK_SYSTEM_PROMPT}\n\n${text}`
-    : text
+function neutralizeScannedText(text: string, head: string): string | undefined {
+  const headed = isUnapprovedChannelOpening(text) ? `${head}\n\n${text}` : text
   const broken = breakIdentityClauses(headed)
   return broken === text ? undefined : broken
 }
@@ -2694,8 +2772,18 @@ function neutralizeScannedText(text: string): string | undefined {
  *
  * Never throws. A body it cannot read is the upstream's to reject, and a
  * parse error must not turn a retry into a crash.
+ *
+ * `head` is the line this retry puts in front, and it defaults to the neutral
+ * placeholder. A caller that opted into `identityHead: 'workbuddy'` passes
+ * {@link WORKBUDDY_VOICED_SYSTEM_PROMPT} instead, so the rescue does not
+ * contradict the head the normal path already sent — see
+ * {@link NEUTRAL_HEADS} for why every head stays recognised as "already
+ * headed".
  */
-export function forceNeutralHead(bodyJson: string): string | undefined {
+export function forceNeutralHead(
+  bodyJson: string,
+  head: string = WORKBUDDY_FALLBACK_SYSTEM_PROMPT,
+): string | undefined {
   let parsed: unknown
   try {
     parsed = JSON.parse(bodyJson)
@@ -2714,7 +2802,7 @@ export function forceNeutralHead(bodyJson: string): string | undefined {
     const content = message['content']
     if (typeof content === 'string') {
       if (content.trim() === '' || startsWithNeutralHead(content)) continue
-      message['content'] = `${WORKBUDDY_FALLBACK_SYSTEM_PROMPT}\n\n${content}`
+      message['content'] = `${head}\n\n${content}`
       changed = true
       continue
     }
@@ -2726,7 +2814,7 @@ export function forceNeutralHead(bodyJson: string): string | undefined {
       if (typeof type !== 'string' || type.trim().toLowerCase() !== 'text') continue
       const text = record['text']
       if (typeof text !== 'string' || text.trim() === '' || startsWithNeutralHead(text)) continue
-      record['text'] = `${WORKBUDDY_FALLBACK_SYSTEM_PROMPT}\n\n${text}`
+      record['text'] = `${head}\n\n${text}`
       changed = true
     }
   }
@@ -3148,15 +3236,21 @@ function lastNonEmptyLineOf(content: string): string {
  * `developer` is normalized to `system` first (the gateways reject
  * `developer`), so an ordinary DSH request already satisfies this and the
  * function is a no-op for it.
+ *
+ * `head` is the line used when nothing supplies a system prompt: the neutral
+ * placeholder, or {@link WORKBUDDY_VOICED_SYSTEM_PROMPT} when the caller opted
+ * into `identityHead: 'workbuddy'`. It is the same selector the fingerprint
+ * rescues use, so a body cannot open with one identity and continue with the
+ * other.
  */
-function ensureSystemHead(obj: Record<string, unknown>): void {
+function ensureSystemHead(obj: Record<string, unknown>, head: string): void {
   const messages = obj['messages']
   if (!Array.isArray(messages) || messages.length === 0) return
-  const head = messages[0]
-  if (typeof head !== 'object' || head === null || Array.isArray(head)) return
-  const role = (head as Record<string, unknown>)['role']
+  const first = messages[0]
+  if (typeof first !== 'object' || first === null || Array.isArray(first)) return
+  const role = (first as Record<string, unknown>)['role']
   if (typeof role === 'string' && role.trim().toLowerCase() === 'system') return
-  messages.unshift({ role: 'system', content: WORKBUDDY_FALLBACK_SYSTEM_PROMPT })
+  messages.unshift({ role: 'system', content: head })
 }
 
 /**
@@ -3228,6 +3322,22 @@ export interface PrepareChatBodyOptions {
    * the pattern invalid.
    */
   extraInjectedPrefixes?: readonly string[]
+  /**
+   * Which line the plugin puts in front of a scanned message when it has to add
+   * one (`identityHead` in the configuration).
+   *
+   * `'neutral'` (default) is {@link WORKBUDDY_FALLBACK_SYSTEM_PROMPT}.
+   * `'workbuddy'` is {@link WORKBUDDY_VOICED_SYSTEM_PROMPT}: the same slot,
+   * claiming the client the access token belongs to instead of describing the
+   * client as nothing in particular.
+   *
+   * WHY IT IS A CHOICE. The head is prepended to every scanned message a rescue
+   * covers, so a voiced head shifts the model's self-description on every
+   * affected request — measured, not hypothetical (see the constant). The
+   * default therefore stays neutral; opting in is how a user says that the
+   * upstream's view of the request matters more than that shift.
+   */
+  identityHead?: 'neutral' | 'workbuddy'
 }
 
 /**
@@ -3426,7 +3536,7 @@ export function prepareChatBody(source: string, options?: PrepareChatBodyOptions
       if (message['role'] === 'developer') message['role'] = 'system'
     }
   }
-  ensureSystemHead(obj)
+  ensureSystemHead(obj, headForIdentity(options?.identityHead))
   // AFTER the system head, so the injected blocks cannot displace it: the
   // gateways require the conversation to OPEN with a system message, and this
   // reorder only ever moves `user` messages among themselves.
@@ -3437,7 +3547,7 @@ export function prepareChatBody(source: string, options?: PrepareChatBodyOptions
   // wording, and `neutralizeChannelFingerprints` would insert U+200B inside a
   // phrase first, making the `replaceAll` miss it (issue #163, owner's order).
   rewriteChannelFingerprintPhrasesInBody(obj)
-  neutralizeChannelFingerprints(obj)
+  neutralizeChannelFingerprints(obj, headForIdentity(options?.identityHead))
   normalizeToolChoice(obj)
   dropRefusedReasoning(obj)
   return JSON.stringify(obj)

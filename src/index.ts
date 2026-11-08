@@ -769,6 +769,23 @@ export interface Config {
    */
   extraInjectedPrefixes?: string[]
   /**
+   * Which line the plugin may put in front of a scanned message.
+   *
+   * `'neutral'` (default) is the placeholder `You are a helpful assistant.` —
+   * it defeats the channel gate's prefix rule without claiming an identity.
+   * `'workbuddy'` is `You are an AI agent running inside WorkBuddy.`: the same
+   * slot, claiming the client the access token belongs to, for an upstream that
+   * scores a request by what its opening says rather than by the bytes it
+   * refuses.
+   *
+   * Off by default because the head rides on every scanned message a rescue
+   * covers, and a voiced head measurably shifts the model's own answer to
+   * 「你是哪个产品的助手？」(CHANGELOG 4.14.1). The rewrites of the host's own
+   * identity sentences are branded WorkBuddy unconditionally — they have to
+   * change anyway, so they are not a separate choice.
+   */
+  identityHead?: 'neutral' | 'workbuddy'
+  /**
    * Drop foreign thinking blocks pi-ai would publish as prose (issue #147).
    *
    * When a session moves between providers, `dsh-llm-pi-ai` rebuilds the other
@@ -1245,6 +1262,17 @@ export const Config: z<Config> = z.object({
       .default([])
       .description('Extra literal prefixes (issue #133) treated like the harness-injected context markers when keepPromptLast is on — for blocks a companion plugin injects that the built-in list does not recognize. Each entry matches the start of a trailing user message; read only while keepPromptLast is enabled. Sampled when the plugin mounts: reload the plugin (or restart the host) after changing it.'),
   ) as unknown as z<string[]>,
+  identityHead: asVolatile(
+    z.union([z.const('neutral'), z.const('workbuddy')])
+      .default('neutral')
+      .description('Which line the plugin may put in front of a scanned message. ' +
+        '"neutral" (default) is the placeholder "You are a helpful assistant." — it defeats the channel gate\'s ' +
+        'prefix rule without claiming an identity. "workbuddy" is "You are an AI agent running inside WorkBuddy.": ' +
+        'the same slot, claiming the client the access token belongs to, for an upstream that scores a request by ' +
+        'what its opening says rather than by the bytes it refuses. Off by default because the head rides on every ' +
+        'scanned message a rescue covers, and a voiced head measurably shifts the model\'s own answer to ' +
+        '「你是哪个产品的助手？」(CHANGELOG 4.14.1). Takes effect on the next turn, no reload.'),
+  ) as unknown as z<'neutral' | 'workbuddy'>,
   dropForeignThinking: asVolatile(
     z.boolean()
       .default(false)
@@ -1727,6 +1755,7 @@ export function apply(ctx: Context, config: Config): void {
       channelPerturbation: unwrapVolatile(config.channelPerturbation) ?? 'failure',
       keepPromptLast: unwrapVolatile(config.keepPromptLast) === true,
       extraInjectedPrefixes: unwrapVolatile(config.extraInjectedPrefixes) ?? [],
+      identityHead: unwrapVolatile(config.identityHead) === 'workbuddy' ? 'workbuddy' : 'neutral',
       sessionTitle: unwrapVolatile(config.sessionTitle) ?? {},
       /**
        * Pool routing, bound to THIS region.

@@ -50,9 +50,13 @@ describe('the sentence-level rewrite table (issue #163)', () => {
       expect(rewritten).not.toContain(span)
     }
     // The rewrites are same-meaning; the model still reads the same rules.
-    expect(rewritten).toContain('You are an AI agent running inside DeepSeek Harness.')
+    expect(rewritten).toContain('You are an AI agent running inside the WorkBuddy client.')
     expect(rewritten).toContain('You are a coding agent running on the qmodel_38max model.')
-    expect(rewritten).toContain('You are working with the user inside the DeepSeek Harness Web GUI')
+    expect(rewritten).toContain('You are working with the user inside the WorkBuddy panel')
+    // And the host's brand is gone from the sentences the upstream reads first:
+    // a rewrite that still said "running inside DeepSeek Harness" would keep the
+    // third-party-harness tell at the same offset the gate already inspects.
+    expect(rewritten).not.toContain('DeepSeek Harness')
     expect(rewritten).toContain('Agent Teams is enabled for this session.')
     expect(rewritten).toContain('Paths that begin with @ are the ones the user explicitly referenced.')
     expect(rewritten).toContain('Relative paths are resolved against the workspace root;')
@@ -90,7 +94,7 @@ describe('the rewrite is wired into prepareChatBody in the required order', () =
     const messages = messagesOf(body)
     expect(messages[0]?.content).toContain('Paths that begin with @')
     expect(messages[0]?.content).not.toContain('Tokens prefixed with @')
-    expect(messages[2]?.content).toContain('running inside DeepSeek Harness')
+    expect(messages[2]?.content).toContain('running inside the WorkBuddy client')
     // The user's own words and a tool result are not the gate's business.
     expect(messages[1]?.content).toBe(TOKENS)
     expect(messages[3]?.content).toBe(TOKENS)
